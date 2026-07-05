@@ -542,7 +542,7 @@ app, rt = fast_app(
 )
 
 
-def _run_sync(id: int, site_url: str, days: int):
+def _run_sync(id: int, site_url: str, days: int, custom_start: str = "", custom_end: str = ""):
     with get_session() as session:
         secrets = CONFIG_DIR / "client_secrets.json"
         auth = GSCAuth(secrets_file=str(secrets))
@@ -551,8 +551,8 @@ def _run_sync(id: int, site_url: str, days: int):
         except ValueError:
             _sync_progress[id] = {"status": "error", "msg": "GSC not authenticated"}
             return
-        start_date, end_date = get_date_range("last_days", days=int(days))
-        dates = get_missing_dates(session, site_url, start_date, end_date)
+        start, end = resolve_dates(days, custom_start, custom_end)
+        dates = get_missing_dates(session, site_url, start, end)
         total = len(dates)
         if total == 0:
             _sync_progress[id] = {"status": "done", "days": 0, "records": 0}
@@ -801,9 +801,23 @@ def site_redirect(id: int):
     return RedirectResponse(site.to(id=id), status_code=301)
 
 
-def render_sync_widget(id: int, days: int = 90):
+def render_sync_widget(id: int, days: int = 90, custom_start: str = "", custom_end: str = ""):
     days = int(days)
     prog = _sync_progress.get(id)
+    
+    db_dates_text = ""
+    with get_session() as session:
+        website = session.get(Website, id)
+        if website:
+            from sqlalchemy import text
+            domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
+            site_url = f"sc-domain:{domain}"
+            res = session.exec(text("SELECT min(date), max(date) FROM gscpropertytotals WHERE site_url = :url").bindparams(url=site_url)).first()
+            if res and res[0] and res[1]:
+                db_dates_text = f"Data: {res[0]} to {res[1]}"
+            else:
+                db_dates_text = "No data yet"
+
     if prog and prog.get("status") == "running":
         total = prog.get("total", 0)
         done = prog.get("done", 0)
@@ -811,7 +825,7 @@ def render_sync_widget(id: int, days: int = 90):
         return Div(
             Progress(cls="-primary w-full h-2", value=str(pct), max="100"),
             Span(f"Syncing GSC: {pct}% ({done}/{total} dates)", cls="text-xs font-semibold text-primary block mt-1"),
-            hx_get=f"/sync_widget?id={id}&days={days}",
+            hx_get=sync_widget.to(id=id, days=days, custom_start=custom_start, custom_end=custom_end),
             hx_trigger="every 2s",
             hx_target="this",
             hx_swap="outerHTML",
@@ -822,7 +836,7 @@ def render_sync_widget(id: int, days: int = 90):
         msg = f"✅ Sync complete! ({days_synced} dates)" if days_synced > 0 else "✅ Up to date!"
         return Div(
             Span(msg, cls="text-xs text-success font-semibold mr-2"),
-            A("🔄 Refresh", href=f"/site?id={id}&days={days}", cls="btn btn-xs btn-success btn-soft"),
+            A("🔄 Refresh", href=f"/site?id={id}&days={days}&custom_start={custom_start}&custom_end={custom_end}", cls="btn btn-xs btn-success btn-soft"),
         )
     if prog and prog.get("status") == "error":
         _sync_progress[id] = None  # Reset progress status so try again shows
@@ -830,21 +844,34 @@ def render_sync_widget(id: int, days: int = 90):
             Span(f"❌ Error: {prog.get('msg', 'Unknown')}", cls="text-xs text-error font-semibold mr-2"),
             Btn("🔄 Try Again",
                 cls="btn btn-xs btn-error btn-soft",
-                hx_post=sync_start.to(id=id, days=days),
+                hx_post=sync_start.to(id=id, days=days, custom_start=custom_start, custom_end=custom_end),
                 hx_target="#sync-container",
                 hx_swap="outerHTML",
             )
         )
-    return Btn("🔄 Sync GSC Data",
-        cls="btn-outline btn-primary btn-sm",
-        hx_post=sync_start.to(id=id, days=days),
-        hx_target="#sync-container",
-        hx_swap="outerHTML",
+    return Div(
+        Div(db_dates_text, cls="text-xs text-base-content/50 whitespace-nowrap mr-3 font-medium"),
+        Div(
+            Btn("🔄 Sync GSC Data",
+                cls="btn-outline btn-primary btn-sm",
+                hx_post=sync_start.to(id=id, days=days, custom_start=custom_start, custom_end=custom_end),
+                hx_target="#sync-container",
+                hx_swap="outerHTML",
+                hx_indicator="#sync-loading"
+            ),
+            Div(Span(cls="loading loading-spinner loading-xs inline-block align-middle mr-1"),
+                "Fetching data...", 
+                id="sync-loading", 
+                cls="htmx-indicator text-xs text-primary font-semibold mt-1 absolute left-0 whitespace-nowrap"
+            ),
+            cls="relative"
+        ),
+        cls="flex items-center"
     )
 
 
 @rt
-def sync_start(id: int, days: int = 90):
+def sync_start(id: int, days: int = 90, custom_start: str = "", custom_end: str = ""):
     days = int(days)
     with get_session() as session:
         website = session.get(Website, id)
@@ -853,22 +880,42 @@ def sync_start(id: int, days: int = 90):
         domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
         site_url = f"sc-domain:{domain}"
     _sync_progress[id] = {"status": "running", "done": 0, "total": 0, "records": 0}
-    Thread(target=_run_sync, args=(id, site_url, days), daemon=True).start()
-    return render_sync_widget(id, days)
+    Thread(target=_run_sync, args=(id, site_url, days, custom_start, custom_end), daemon=True).start()
+    return render_sync_widget(id, days, custom_start, custom_end)
 
 
 @rt
-def sync_widget(id: int, days: int = 90):
-    return render_sync_widget(id, days)
+def sync_widget(id: int, days: int = 90, custom_start: str = "", custom_end: str = ""):
+    return render_sync_widget(id, days, custom_start, custom_end)
 
 
-DAYS_OPTIONS = [(30, "30 Days"), (90, "3 Months"), (180, "6 Months"), (365, "12 Months"), (480, "16 Months")]
+
+def resolve_dates(days: int, custom_start: str, custom_end: str) -> tuple[str, str]:
+    from seootter.gsc_client import get_date_range
+    if days == 1:
+        return get_date_range("today")
+    elif days == 0:
+        return custom_start, custom_end
+    else:
+        return get_date_range("last_days", days=days)
+
+def render_custom_date_inputs(current_days: int, custom_start: str, custom_end: str):
+    if current_days != 0:
+        return ""
+    return Div(
+        Input(type="date", name="custom_start", value=custom_start, cls="input input-sm input-bordered w-32"),
+        Input(type="date", name="custom_end", value=custom_end, cls="input input-sm input-bordered w-32"),
+        Button("Apply", type="submit", cls="btn btn-sm btn-primary"),
+        cls="flex items-center gap-2 ml-2"
+    )
+
+DAYS_OPTIONS = [(1, "Today"), (30, "30 Days"), (90, "3 Months"), (180, "6 Months"), (365, "12 Months"), (480, "16 Months"), (0, "Custom")]
 
 def get_days_label(days: int) -> str:
     return dict(DAYS_OPTIONS).get(days, f"{days} days")
 
 @rt
-def site(id: int, days: int = 30):
+def site(id: int, days: int = 30, custom_start: str = "", custom_end: str = ""):
     days = int(days)
     with get_session() as session:
         website = session.get(Website, id)
@@ -878,8 +925,8 @@ def site(id: int, days: int = 30):
         domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
         site_url = f"sc-domain:{domain}"
 
-        metrics = get_site_metrics(session, site_url, days=days)
-        start, end = get_date_range("last_days", days=days)
+        metrics = get_site_metrics(session, site_url, days=days, custom_start=custom_start, custom_end=custom_end)
+        start, end = resolve_dates(days, custom_start, custom_end)
         tp = get_top_pages(session, site_url, start, end, limit=10)
 
         delete_modal_id = f"delete-modal-{id}"
@@ -898,16 +945,21 @@ def site(id: int, days: int = 30):
                         ),
                     ),
                     Div(cls="page-header actions")(
-                        Select(
-                            *[Option(label, value=str(val), selected=(days == val)) for val, label in DAYS_OPTIONS],
-                            cls="select select-bordered select-sm mr-2",
-                            name="days",
-                            onchange=f"window.location.href='/site?id={id}&days=' + this.value"
+                        Form(
+                            Input(type="hidden", name="id", value=str(id)),
+                            Select(
+                                *[Option(label, value=str(val), selected=(days == val)) for val, label in DAYS_OPTIONS],
+                                cls="select select-bordered select-sm mr-2",
+                                name="days",
+                                onchange="this.form.submit()"
+                            ),
+                            render_custom_date_inputs(days, custom_start, custom_end),
+                            action="/site", method="get", cls="flex items-center"
                         ),
                         Button("🗑 Delete", cls="btn btn-soft btn-error btn-sm mr-2",
                                onclick=f"document.getElementById('{delete_modal_id}').showModal()"),
                         Div(id="sync-container", cls="inline-block align-middle")(
-                            render_sync_widget(id, days)
+                            render_sync_widget(id, days, custom_start, custom_end)
                         ),
                     ),
                 ),
@@ -962,9 +1014,9 @@ def site(id: int, days: int = 30):
         ),
 
 
-def get_site_metrics(session, site_url, days=30):
+def get_site_metrics(session, site_url, days=30, custom_start="", custom_end=""):
     from seootter.gsc.queries import get_property_totals
-    start, end = get_date_range("last_days", days=int(days))
+    start, end = resolve_dates(days, custom_start, custom_end)
     totals = get_property_totals(session, site_url, start, end)
     return {
         "clicks": totals["clicks"],
@@ -1037,7 +1089,7 @@ SORT_OPTIONS = [
 # DAYS_OPTIONS is defined globally above
 
 
-def render_top_pages_filters(id: int, current_sort: str, current_days: int, current_country: str, countries: list[tuple[str, str]]):
+def render_top_pages_filters(id: int, current_sort: str, current_days: int, current_country: str, countries: list[tuple[str, str]], custom_start: str = "", custom_end: str = ""):
     return Div(cls="flex flex-wrap items-center gap-2 mb-4")(
         Span("Sort:", cls="text-sm font-medium"),
         Div(cls="join")(
@@ -1061,7 +1113,8 @@ def render_top_pages_filters(id: int, current_sort: str, current_days: int, curr
                 name="country", cls="select select-sm w-44",
                 onchange="this.form.submit()",
             ),
-            action=top_pages.to(), method="get",
+            render_custom_date_inputs(current_days, custom_start, custom_end),
+            action=top_pages.to(), method="get"
         ),
     )
 
@@ -1086,14 +1139,14 @@ def render_top_pages_full(rows):
 
 
 @rt
-def top_pages(id: int, sort: str = "clicks", days: int = 30, country: str = "", export: str = ""):
+def top_pages(id: int, sort: str = "clicks", days: int = 30, country: str = "", export: str = "", custom_start: str = "", custom_end: str = ""):
     with get_session() as session:
         website = session.get(Website, id)
         if not website:
             return Titled("Website not found", P("Website not found"))
         domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
         site_url = f"sc-domain:{domain}"
-        start, end = get_date_range("last_days", days=days)
+        start, end = resolve_dates(days, custom_start, custom_end)
         rows = get_top_pages(session, site_url, start, end, limit=200, country=country or None)
 
         key = {"clicks": "total_clicks", "impressions": "total_impressions",
@@ -1221,14 +1274,14 @@ def render_keywords_table(rows: list[dict]):
 
 @rt
 def keywords(id: int, intent: str = "", green_only: bool = False, issues_only: bool = False,
-             days: int = 30, country: str = "", export: str = ""):
+             days: int = 30, country: str = "", export: str = "", custom_start: str = "", custom_end: str = ""):
     with get_session() as session:
         website = session.get(Website, id)
         if not website:
             return Titled("Website not found", P("Website not found"))
         domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
         site_url = f"sc-domain:{domain}"
-        start, end = get_date_range("last_days", days=days)
+        start, end = resolve_dates(days, custom_start, custom_end)
 
         rows = get_top_queries(session, site_url, start, end, country=country or None, limit=500)
         trends = detect_query_trends(session, site_url, days=days, limit=500)
@@ -1307,7 +1360,7 @@ def keywords_rows(id: int, intent: str = "", green_only: bool = False, issues_on
             return P("Website not found")
         domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
         site_url = f"sc-domain:{domain}"
-        start, end = get_date_range("last_days", days=days)
+        start, end = resolve_dates(days, custom_start, custom_end)
 
         rows = get_top_queries(session, site_url, start, end, country=country or None, limit=500)
         trends = detect_query_trends(session, site_url, days=days, limit=500)
@@ -1339,7 +1392,7 @@ def keywords_rows(id: int, intent: str = "", green_only: bool = False, issues_on
 
 
 @rt
-def keyword_pages(id: int, query: str, days: int = 30, country: str = ""):
+def keyword_pages(id: int, query: str, days: int = 30, country: str = "", custom_start: str = "", custom_end: str = ""):
     """HTMX fragment: pages ranking for a keyword."""
     with get_session() as session:
         website = session.get(Website, id)
@@ -1347,7 +1400,7 @@ def keyword_pages(id: int, query: str, days: int = 30, country: str = ""):
             return P("Website not found")
         domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
         site_url = f"sc-domain:{domain}"
-        start, end = get_date_range("last_days", days=days)
+        start, end = resolve_dates(days, custom_start, custom_end)
         pages = session.exec(
             select(GSCAnalytics.page, func.sum(GSCAnalytics.clicks).label("clicks"),
                    func.sum(GSCAnalytics.impressions).label("impressions"),
@@ -1369,7 +1422,7 @@ def keyword_pages(id: int, query: str, days: int = 30, country: str = ""):
     )
 
 
-def render_wins_filters(id: int, current_intent: str, current_days: int, current_country: str, countries: list[tuple[str, str]]):
+def render_wins_filters(id: int, current_intent: str, current_days: int, current_country: str, countries: list[tuple[str, str]], custom_start: str = "", custom_end: str = ""):
     return Div(cls="flex flex-wrap items-center gap-2 mb-4")(
         Span("Intent:", cls="text-sm font-medium"),
         Div(cls="join")(
@@ -1390,7 +1443,8 @@ def render_wins_filters(id: int, current_intent: str, current_days: int, current
             Input(name="days", value=str(current_days), type="hidden"),
             Select(*[Option(label, value=v, selected=(v == current_country)) for v, label in countries],
                    name="country", cls="select select-sm w-44", onchange="this.form.submit()"),
-            action=wins.to(), method="get",
+            render_custom_date_inputs(current_days, custom_start, custom_end),
+            action=wins.to(), method="get"
         ),
     )
 
@@ -1420,7 +1474,7 @@ def render_wins_rows(rows: list[dict]):
 
 
 @rt
-def wins(id: int, intent: str = "", days: int = 30, country: str = "", rows_only: bool = False, export: str = ""):
+def wins(id: int, intent: str = "", days: int = 30, country: str = "", rows_only: bool = False, export: str = "", custom_start: str = "", custom_end: str = ""):
     with get_session() as session:
         website = session.get(Website, id)
         if not website:
@@ -1428,7 +1482,7 @@ def wins(id: int, intent: str = "", days: int = 30, country: str = "", rows_only
                     else Titled("Website not found", P("Website not found")))
         domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
         site_url = f"sc-domain:{domain}"
-        start, end = get_date_range("last_days", days=days)
+        start, end = resolve_dates(days, custom_start, custom_end)
 
         rows = get_wins(session, site_url, start, end, country=country or None, limit=200)
         trends = detect_query_trends(session, site_url, days=days, limit=500)
@@ -1763,14 +1817,14 @@ def render_country_table(rows, site_avg_ctr):
 
 
 @rt
-def countries(id: int, sort: str = "clicks", days: int = 30, page_url: str = "", export: str = ""):
+def countries(id: int, sort: str = "clicks", days: int = 30, page_url: str = "", export: str = "", custom_start: str = "", custom_end: str = ""):
     with get_session() as session:
         website = session.get(Website, id)
         if not website:
             return Titled("Website not found", P("Website not found"))
         domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
         site_url = f"sc-domain:{domain}"
-        start, end = get_date_range("last_days", days=days)
+        start, end = resolve_dates(days, custom_start, custom_end)
         rows = get_country_breakdown(session, site_url, start, end,
                                      page_url=page_url or None, limit=50)
 
@@ -1865,14 +1919,14 @@ def render_cannibal_group(group, metrics_map, source_label):
 
 
 @rt
-def canb(id: int, days: int = 30, export: str = ""):
+def canb(id: int, days: int = 30, export: str = "", custom_start: str = "", custom_end: str = ""):
     with get_session() as session:
         website = session.get(Website, id)
         if not website:
             return Titled("Website not found", P("Website not found"))
         domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
         site_url = f"sc-domain:{domain}"
-        start, end = get_date_range("last_days", days=days)
+        start, end = resolve_dates(days, custom_start, custom_end)
         cannib = find_cannibalized(session, id, site_url, start, end)
         exact = cannib.get("exact_matches", [])
         gsc = cannib.get("gsc_matches", [])
@@ -1959,7 +2013,8 @@ def render_faq_filters(id, current_sort, current_days, current_page_url):
             Input(name="days", value=str(current_days), type="hidden"),
             Input(name="page_url", value=current_page_url,
                   placeholder="https://...", cls="input input-bordered input-xs w-44"),
-            action=faq.to(), method="get",
+            render_custom_date_inputs(days, custom_start, custom_end),
+            action=faq.to(), method="get"
         ),
     )
 
@@ -1985,14 +2040,14 @@ def render_faq_table(rows):
 
 
 @rt
-def faq(id: int, sort: str = "impressions", days: int = 30, page_url: str = "", export: str = ""):
+def faq(id: int, sort: str = "impressions", days: int = 30, page_url: str = "", export: str = "", custom_start: str = "", custom_end: str = ""):
     with get_session() as session:
         website = session.get(Website, id)
         if not website:
             return Titled("Website not found", P("Website not found"))
         domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
         site_url = f"sc-domain:{domain}"
-        start, end = get_date_range("last_days", days=days)
+        start, end = resolve_dates(days, custom_start, custom_end)
         rows = get_top_queries(session, site_url, start, end,
                                page_path=page_url or None, limit=200,
                                sort_by="impressions")
@@ -2121,7 +2176,7 @@ def serpwatcher_delete_keyword(id: int, keyword_id: int):
 
 
 @rt
-def serpwatcher_keywords_list(id: int, days: int = 30):
+def serpwatcher_keywords_list(id: int, days: int = 30, custom_start: str = "", custom_end: str = ""):
     with get_session() as session:
         website = session.get(Website, id)
         if not website:
@@ -2132,7 +2187,7 @@ def serpwatcher_keywords_list(id: int, days: int = 30):
         if not keywords:
             return P("No keywords being tracked. Add one above.", cls="text-sm text-base-content/60")
 
-        start, end = get_date_range("last_days", days=days)
+        start, end = resolve_dates(days, custom_start, custom_end)
         kw_set = {k.keyword.lower() for k in keywords}
         trends = get_trends(session, site_url, start, end, dimension="query")
         from collections import defaultdict
@@ -2192,7 +2247,7 @@ def serpwatcher_keywords_list(id: int, days: int = 30):
 
 
 @rt
-def serpwatcher(id: int, days: int = 30):
+def serpwatcher(id: int, days: int = 30, custom_start: str = "", custom_end: str = ""):
     with get_session() as session:
         website = session.get(Website, id)
         if not website:
@@ -2203,7 +2258,7 @@ def serpwatcher(id: int, days: int = 30):
 
         all_data = []
         if keywords:
-            start, end = get_date_range("last_days", days=days)
+            start, end = resolve_dates(days, custom_start, custom_end)
             kw_set = {k.keyword.lower() for k in keywords}
             trends = get_trends(session, site_url, start, end, dimension="query")
             query_positions = {}
@@ -2224,7 +2279,7 @@ def serpwatcher(id: int, days: int = 30):
 
     movers = []
     if keywords:
-        start, end = get_date_range("last_days", days=days)
+        start, end = resolve_dates(days, custom_start, custom_end)
         kw_set = {k.keyword.lower() for k in keywords}
         trends2 = get_trends(session, site_url, start, end, dimension="query")
         kw_trend = {}

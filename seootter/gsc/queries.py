@@ -302,7 +302,7 @@ def get_country_breakdown(session: Session,  # Active database session
 
     return [row._asdict() for row in session.exec(query)]
 
-# %% ../../nbs/05b_gsc_queries.ipynb #dd62bb46
+# %% ../../nbs/05b_gsc_queries.ipynb #97f97390
 def get_property_totals(session: Session,  # Active database session
                         site_url: str,  # GSC property URL
                         start_date: str,  # Start date (YYYY-MM-DD)

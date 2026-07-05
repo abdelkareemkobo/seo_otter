@@ -222,7 +222,7 @@ class GSCAnalytics(SQLModel, table=True):
 
 
 
-# %% ../nbs/01_models.ipynb #7a55bfc6
+# %% ../nbs/01_models.ipynb #d7944ca2
 class GSCPropertyTotals(SQLModel, table=True):
     "Google Search Console property-level analytics totals."
     __table_args__ = (

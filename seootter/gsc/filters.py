@@ -97,7 +97,7 @@ def store_gsc_data(session: Session,  # Active database session
     session.commit()
 
 
-# %% ../../nbs/05a_gsc_filters.ipynb #c0470a91
+# %% ../../nbs/05a_gsc_filters.ipynb #557652f2
 from ..models import GSCPropertyTotals
 
 def store_gsc_property_totals(session: Session,

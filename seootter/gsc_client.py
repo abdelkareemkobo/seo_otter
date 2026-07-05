@@ -70,7 +70,7 @@ def get_date_range(range_type: str = "today",
     "Generate a date range for GSC queries, accounting for the 3-day data delay."
     fmt = lambda d: d.strftime("%Y-%m-%d")
     today = datetime.now()
-    latest = today - timedelta(days=3)
+    latest = today - timedelta(days=1)
 
     match range_type:
         case "today":

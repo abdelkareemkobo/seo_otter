@@ -142,7 +142,11 @@ def generate_seo_report(
 
         with ThreadPoolExecutor(max_workers=10) as pool:
             futures = {pool.submit(_fetch_one, a): a for a in fetch_articles}
+            fetched_count = 0
             for future in as_completed(futures):
+                fetched_count += 1
+                if progress_callback:
+                    progress_callback(0, total, f"Prefetching {fetched_count}/{len(fetch_articles)}...")
                 url, result = future.result()
                 if result:
                     prefetched[url] = result
