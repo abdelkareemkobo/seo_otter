@@ -315,7 +315,7 @@ def fetch_url_as_markdown(url: str,  # Live URL to fetch
     import httpx, lxml.html
     from lxml.html.clean import Cleaner
 
-    body = lxml.html.fromstring(httpx.get(url).text).xpath('//body')[0]
+    body = lxml.html.fromstring(httpx.get(url, verify=False, headers={"User-Agent": "Mozilla/5.0"}).text).xpath('//body')[0]
     body = Cleaner(javascript=True, style=True).clean_html(body)
     cts = ''.join(lxml.html.tostring(c, encoding='unicode') for c in body)
 

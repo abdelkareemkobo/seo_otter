@@ -1,4 +1,10 @@
 from fasthtml.common import *
+
+def get_site_url(url: str) -> str:
+    raw = url.strip()
+    domain = raw.replace("https://", "").replace("http://", "").strip().rstrip("/")
+    return raw if "/" in domain else f"sc-domain:{domain}"
+
 from fhdaisy import *
 from fhdaisy.core import daisy_hdrs
 from seootter.sqlite_db import get_session
@@ -61,7 +67,7 @@ def _save_cached_report(website_id: int, data: dict):
     _report_cache[website_id] = data
     REPORT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     path = _report_cache_path(website_id)
-    path.write_text(json.dumps(data, default=str, ensure_ascii=False))
+    path.write_text(json.dumps(data, default=str, ensure_ascii=False), encoding="utf-8")
 
 
 # ── Export helpers ────────────────────────────────────────────────
@@ -559,8 +565,12 @@ def _run_sync(id: int, site_url: str, days: int, custom_start: str = "", custom_
             return
         _sync_progress[id] = {"status": "running", "total": total, "done": 0, "records": 0}
         for date in dates:
-            count = store_single_date(session, auth, site_url, date)
-            _sync_progress[id].update(done=_sync_progress[id]["done"] + 1, records=_sync_progress[id]["records"] + count)
+            try:
+                count = store_single_date(session, auth, site_url, date)
+                _sync_progress[id].update(done=_sync_progress[id]["done"] + 1, records=_sync_progress[id]["records"] + count)
+            except Exception as e:
+                _sync_progress[id] = {"status": "error", "msg": str(e)}
+                return
             time.sleep(1)
         p = _sync_progress[id]
         _sync_progress[id] = {"status": "done", "days": p["done"], "records": p["records"]}
@@ -635,7 +645,7 @@ def _favicon_url(domain: str, size: int = 32) -> str:
     return f"https://www.google.com/s2/favicons?domain={domain}&sz={size}&default=emoji"
 
 def render_site_card(w):
-    domain = w.url.replace("https://", "").replace("http://", "").rstrip("/")
+    domain = w.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
     fallback_emoji = SITE_TYPE_ICONS.get(w.site_type or "other", "🌐")
     site_type = (w.site_type or "other").title()
     return A(
@@ -702,6 +712,9 @@ def render_add_form():
                             Option("French (fr)", value="fr"),
                             Option("Spanish (es)", value="es"),
                             Option("German (de)", value="de"),
+                            Option("Italia (it)", value="it"),
+                            Option("Portugal (pt)", value="pt"),
+                            Option("Chinese (zh)", value="zh"),
                             name="lang", cls="select w-full"),
                         P("Two-letter language code", cls="text-xs text-base-content/50 mt-1")),
                     Fieldset(FieldsetLegend(cls="text-xs font-medium")("Content Directory"),
@@ -733,8 +746,8 @@ def index():
         if websites:
             from sqlmodel import func as _func
             for w in websites:
-                domain = w.url.replace("https://", "").replace("http://", "").rstrip("/")
-                site_url = f"sc-domain:{domain}"
+                domain = w.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+                site_url = get_site_url(w.url)
                 d = session.exec(select(_func.max(GSCAnalytics.date)).where(GSCAnalytics.site_url == site_url)).first()
                 if d:
                     if isinstance(d, str):
@@ -810,8 +823,8 @@ def render_sync_widget(id: int, days: int = 90, custom_start: str = "", custom_e
         website = session.get(Website, id)
         if website:
             from sqlalchemy import text
-            domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-            site_url = f"sc-domain:{domain}"
+            domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+            site_url = get_site_url(website.url)
             res = session.exec(text("SELECT min(date), max(date) FROM gscpropertytotals WHERE site_url = :url").bindparams(url=site_url)).first()
             if res and res[0] and res[1]:
                 db_dates_text = f"Data: {res[0]} to {res[1]}"
@@ -877,8 +890,8 @@ def sync_start(id: int, days: int = 90, custom_start: str = "", custom_end: str 
         website = session.get(Website, id)
         if not website:
             return P("Website not found")
-        domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-        site_url = f"sc-domain:{domain}"
+        domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        site_url = get_site_url(website.url)
     _sync_progress[id] = {"status": "running", "done": 0, "total": 0, "records": 0}
     Thread(target=_run_sync, args=(id, site_url, days, custom_start, custom_end), daemon=True).start()
     return render_sync_widget(id, days, custom_start, custom_end)
@@ -890,9 +903,25 @@ def sync_widget(id: int, days: int = 90, custom_start: str = "", custom_end: str
 
 
 
+def _latest_db_date() -> str:
+    try:
+        from sqlmodel import Session, create_engine
+        from sqlalchemy import text
+        import os
+        db_url = os.getenv("SEEOOTTER_DB_URL", "")
+        if not db_url:
+            return ""
+        with Session(create_engine(db_url)) as session:
+            return session.exec(text("SELECT MAX(date) FROM gscanalytics")).scalar()
+    except Exception:
+        return ""
+
 def resolve_dates(days: int, custom_start: str, custom_end: str) -> tuple[str, str]:
     from seootter.gsc_client import get_date_range
     if days == 1:
+        latest = _latest_db_date()
+        if latest:
+            return latest, latest
         return get_date_range("today")
     elif days == 0:
         return custom_start, custom_end
@@ -909,7 +938,7 @@ def render_custom_date_inputs(current_days: int, custom_start: str, custom_end: 
         cls="flex items-center gap-2 ml-2"
     )
 
-DAYS_OPTIONS = [(1, "Today"), (30, "30 Days"), (90, "3 Months"), (180, "6 Months"), (365, "12 Months"), (480, "16 Months"), (0, "Custom")]
+DAYS_OPTIONS = [(1, "Today"), (3, "3 Days"), (7, "7 Days"), (15, "15 Days"), (30, "30 Days"), (90, "3 Months"), (180, "6 Months"), (240, "8 Months"), (365, "12 Months"), (480, "16 Months"), (0, "Custom")]
 
 def get_days_label(days: int) -> str:
     return dict(DAYS_OPTIONS).get(days, f"{days} days")
@@ -922,8 +951,8 @@ def site(id: int, days: int = 30, custom_start: str = "", custom_end: str = ""):
         if not website:
             return Titled("Website not found", P("Website not found"))
 
-        domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-        site_url = f"sc-domain:{domain}"
+        domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        site_url = get_site_url(website.url)
 
         metrics = get_site_metrics(session, site_url, days=days, custom_start=custom_start, custom_end=custom_end)
         start, end = resolve_dates(days, custom_start, custom_end)
@@ -1144,8 +1173,8 @@ def top_pages(id: int, sort: str = "clicks", days: int = 30, country: str = "", 
         website = session.get(Website, id)
         if not website:
             return Titled("Website not found", P("Website not found"))
-        domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-        site_url = f"sc-domain:{domain}"
+        domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        site_url = get_site_url(website.url)
         start, end = resolve_dates(days, custom_start, custom_end)
         rows = get_top_pages(session, site_url, start, end, limit=200, country=country or None)
 
@@ -1279,8 +1308,8 @@ def keywords(id: int, intent: str = "", green_only: bool = False, issues_only: b
         website = session.get(Website, id)
         if not website:
             return Titled("Website not found", P("Website not found"))
-        domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-        site_url = f"sc-domain:{domain}"
+        domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        site_url = get_site_url(website.url)
         start, end = resolve_dates(days, custom_start, custom_end)
 
         rows = get_top_queries(session, site_url, start, end, country=country or None, limit=500)
@@ -1358,8 +1387,8 @@ def keywords_rows(id: int, intent: str = "", green_only: bool = False, issues_on
         website = session.get(Website, id)
         if not website:
             return P("Website not found")
-        domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-        site_url = f"sc-domain:{domain}"
+        domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        site_url = get_site_url(website.url)
         start, end = resolve_dates(days, custom_start, custom_end)
 
         rows = get_top_queries(session, site_url, start, end, country=country or None, limit=500)
@@ -1398,8 +1427,8 @@ def keyword_pages(id: int, query: str, days: int = 30, country: str = "", custom
         website = session.get(Website, id)
         if not website:
             return P("Website not found")
-        domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-        site_url = f"sc-domain:{domain}"
+        domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        site_url = get_site_url(website.url)
         start, end = resolve_dates(days, custom_start, custom_end)
         pages = session.exec(
             select(GSCAnalytics.page, func.sum(GSCAnalytics.clicks).label("clicks"),
@@ -1480,8 +1509,8 @@ def wins(id: int, intent: str = "", days: int = 30, country: str = "", rows_only
         if not website:
             return (P("Website not found") if rows_only
                     else Titled("Website not found", P("Website not found")))
-        domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-        site_url = f"sc-domain:{domain}"
+        domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        site_url = get_site_url(website.url)
         start, end = resolve_dates(days, custom_start, custom_end)
 
         rows = get_wins(session, site_url, start, end, country=country or None, limit=200)
@@ -1615,8 +1644,8 @@ def index_check_start(id: int, sitemap_url: str):
         website = session.get(Website, id)
         if not website:
             return P("Website not found")
-        domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-        site_url = f"sc-domain:{domain}"
+        domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        site_url = get_site_url(website.url)
     _index_check_progress[id] = {"status": "fetching"}
     Thread(target=_run_index_check, args=(id, site_url, sitemap_url), daemon=True).start()
     return Div(
@@ -1670,8 +1699,8 @@ def index_status(id: int):
         website = session.get(Website, id)
         if not website:
             return Titled("Website not found", P("Website not found"))
-        domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-        site_url = f"sc-domain:{domain}"
+        domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        site_url = get_site_url(website.url)
 
         all_pages = get_index_status(session, site_url)
         indexed = [p for p in all_pages if p.verdict == "PASS"]
@@ -1822,8 +1851,8 @@ def countries(id: int, sort: str = "clicks", days: int = 30, page_url: str = "",
         website = session.get(Website, id)
         if not website:
             return Titled("Website not found", P("Website not found"))
-        domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-        site_url = f"sc-domain:{domain}"
+        domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        site_url = get_site_url(website.url)
         start, end = resolve_dates(days, custom_start, custom_end)
         rows = get_country_breakdown(session, site_url, start, end,
                                      page_url=page_url or None, limit=50)
@@ -1924,8 +1953,8 @@ def canb(id: int, days: int = 30, export: str = "", custom_start: str = "", cust
         website = session.get(Website, id)
         if not website:
             return Titled("Website not found", P("Website not found"))
-        domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-        site_url = f"sc-domain:{domain}"
+        domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        site_url = get_site_url(website.url)
         start, end = resolve_dates(days, custom_start, custom_end)
         cannib = find_cannibalized(session, id, site_url, start, end)
         exact = cannib.get("exact_matches", [])
@@ -2045,8 +2074,8 @@ def faq(id: int, sort: str = "impressions", days: int = 30, page_url: str = "", 
         website = session.get(Website, id)
         if not website:
             return Titled("Website not found", P("Website not found"))
-        domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-        site_url = f"sc-domain:{domain}"
+        domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        site_url = get_site_url(website.url)
         start, end = resolve_dates(days, custom_start, custom_end)
         rows = get_top_queries(session, site_url, start, end,
                                page_path=page_url or None, limit=200,
@@ -2103,7 +2132,10 @@ def _render_mover_row(m):
     color = "text-success" if is_improvement else "text-error"
     return Div(cls="flex items-center justify-between text-sm")(
         Span(m["query"], cls="truncate max-w-[200px]"),
-        Span(f"{icon} {abs(change):.1f} pos", cls=f"{color} font-medium"),
+        Div(cls="flex items-center gap-2")(
+            Span(f"Pos {m.get('last', 0):.1f}", cls="text-base-content/70"),
+            Span(f"{icon} {abs(change):.1f}", cls=f"{color} font-medium"),
+        )
     )
 
 
@@ -2114,28 +2146,63 @@ def _compute_dominance_index(keywords_data):
     if not positions:
         return 0, "No position data"
     avg_pos = sum(positions) / len(positions)
-    score = max(0, round(100 - (avg_pos - 1) * 100 / 19))
+    score = max(0, min(100, round(100 - (avg_pos - 1) * 100 / 99)))
     label = "Excellent" if score >= 80 else "Good" if score >= 60 else "Fair" if score >= 40 else "Needs Work"
     return score, label
 
 
-def _render_position_history(history):
+def _render_position_history(history, start_date=None, end_date=None, max_bars=40):
     if not history:
         return P("No position data yet.", cls="text-xs text-base-content/40")
-    recent = history[-30:]
+    
+    from datetime import datetime, timedelta
+
+    if not start_date:
+        start_date = history[0]["date"]
+    if not end_date:
+        end_date = history[-1]["date"]
+        
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+    total_days = (end_dt - start_dt).days + 1
+    if total_days <= 0:
+        total_days = 1
+        
+    num_bars = min(max_bars, total_days)
+    buckets = [[] for _ in range(num_bars)]
+    
+    for h in history:
+        h_dt = datetime.strptime(h["date"], "%Y-%m-%d")
+        if h_dt < start_dt or h_dt > end_dt:
+            continue
+        days_from_start = (h_dt - start_dt).days
+        bucket_idx = int((days_from_start / total_days) * num_bars)
+        bucket_idx = min(bucket_idx, num_bars - 1)
+        buckets[bucket_idx].append(h)
+        
+    recent = []
+    for i, bucket in enumerate(buckets):
+        valid_pos = [h["avg_position"] for h in bucket if h.get("avg_position")]
+        avg_pos = sum(valid_pos) / len(valid_pos) if valid_pos else None
+        bucket_days = total_days / num_bars
+        mid_days = (i + 0.5) * bucket_days
+        mid_date = (start_dt + timedelta(days=mid_days)).strftime("%Y-%m-%d")
+        recent.append({"avg_position": avg_pos, "date": mid_date})
+
     positions = [h.get("avg_position") for h in recent if h.get("avg_position")]
     min_pos = min(positions) if positions else 1
     max_pos = max(positions) if positions else 20
     pos_range = max(max_pos - min_pos, 5)
-    return Div(
+    
+    return Div(cls="w-max")(
         Div(cls="flex gap-0.5 items-end h-7", style="position: relative;")(
             *[_render_position_bar(h.get("avg_position"), h.get("date", ""), min_pos, pos_range)
               for h in recent]
         ),
         Div(cls="flex justify-between text-[10px] text-base-content/30 mt-0.5")(
-            Span(recent[0]["date"][5:] if recent else ""),
+            Span(start_date[5:]),
             Span(f"pos {min_pos:.0f}–{max_pos:.0f}"),
-            Span(recent[-1]["date"][5:] if recent else ""),
+            Span(end_date[5:]),
         ),
     )
 
@@ -2152,7 +2219,17 @@ def _render_position_bar(pos, date, min_pos=1, pos_range=10):
 
 @rt
 def serpwatcher_add_keyword(id: int, keyword: str):
+    keyword = keyword.strip()
     with get_session() as session:
+        existing = get_tracked_keywords(session, id)
+        if any(k.keyword.lower() == keyword.lower() for k in existing):
+            return Div(
+                Span(f"'{keyword}' is already tracked", cls="text-sm text-warning"),
+                hx_get=serpwatcher_keywords_list.to(id=id),
+                hx_target="#serpwatcher-keywords",
+                hx_swap="innerHTML",
+                hx_trigger="load",
+            )
         add_tracked_keyword(session, id, keyword)
     return Div(
         Span(f"Added '{keyword}'", cls="text-sm text-success"),
@@ -2176,13 +2253,13 @@ def serpwatcher_delete_keyword(id: int, keyword_id: int):
 
 
 @rt
-def serpwatcher_keywords_list(id: int, days: int = 30, custom_start: str = "", custom_end: str = ""):
+def serpwatcher_keywords_list(id: int, days: int = 30, custom_start: str = "", custom_end: str = "", sort: str = "date"):
     with get_session() as session:
         website = session.get(Website, id)
         if not website:
             return P("Website not found")
-        domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-        site_url = f"sc-domain:{domain}"
+        domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        site_url = get_site_url(website.url)
         keywords = get_tracked_keywords(session, id)
         if not keywords:
             return P("No keywords being tracked. Add one above.", cls="text-sm text-base-content/60")
@@ -2194,12 +2271,12 @@ def serpwatcher_keywords_list(id: int, days: int = 30, custom_start: str = "", c
         by_kw = defaultdict(list)
         for r in trends:
             if r["query"] and r["query"].lower() in kw_set:
-                by_kw[r["query"]].append({"date": r["date"], "avg_position": round(r["avg_position"], 1) if r["avg_position"] else None,
+                by_kw[r["query"].lower()].append({"date": r["date"], "avg_position": round(r["avg_position"], 1) if r["avg_position"] else None,
                                            "clicks": r["clicks"] or 0, "impressions": r["impressions"] or 0})
 
-    cards = []
+    kw_data = []
     for kw in keywords:
-        hist = by_kw.get(kw.keyword, [])
+        hist = by_kw.get(kw.keyword.lower(), [])
         hist.sort(key=lambda h: h["date"])
         latest = hist[-1] if hist else {}
         first = hist[0] if hist else {}
@@ -2208,15 +2285,78 @@ def serpwatcher_keywords_list(id: int, days: int = 30, custom_start: str = "", c
         total_clicks = sum(h["clicks"] for h in hist)
         total_impressions = sum(h["impressions"] for h in hist)
 
-        trend_icon = Span("—", cls="text-base-content/30 text-xs")
-        trend_text = ""
-        if cur_pos and first.get("avg_position") and cur_pos != first["avg_position"]:
+        diff = 0
+        if cur_pos and first.get("avg_position"):
             diff = cur_pos - first["avg_position"]
-            direction = "up" if diff < 0 else "down"
-            cls = "text-success" if diff < 0 else "text-error"
+
+        kw_data.append({
+            "kw": kw,
+            "hist": hist,
+            "cur_pos": cur_pos or 999,
+            "avg_pos": avg_pos,
+            "total_clicks": total_clicks,
+            "total_impressions": total_impressions,
+            "diff": diff,
+            "first": first,
+            "latest": latest
+        })
+
+    if sort == "pos_asc":
+        kw_data.sort(key=lambda x: x["cur_pos"])
+    elif sort == "pos_desc":
+        kw_data.sort(key=lambda x: (x["cur_pos"] != 999, x["cur_pos"]), reverse=True)
+    elif sort == "gainers":
+        kw_data.sort(key=lambda x: x["diff"])
+    elif sort == "losers":
+        kw_data.sort(key=lambda x: x["diff"], reverse=True)
+    elif sort == "clicks":
+        kw_data.sort(key=lambda x: x["total_clicks"], reverse=True)
+    elif sort == "impressions":
+        kw_data.sort(key=lambda x: x["total_impressions"], reverse=True)
+    elif sort == "alpha":
+        kw_data.sort(key=lambda x: x["kw"].keyword.lower())
+    else:
+        kw_data.sort(key=lambda x: x["kw"].id, reverse=True)
+
+    sort_options = [
+        ("date", "Date Added (Newest)"),
+        ("pos_asc", "Highest Position"),
+        ("pos_desc", "Lowest Position"),
+        ("gainers", "Top Gainers"),
+        ("losers", "Top Losers"),
+        ("clicks", "Most Clicks"),
+        ("impressions", "Most Impressions"),
+        ("alpha", "Alphabetical"),
+    ]
+
+    header = Div(cls="flex items-center justify-between mb-4")(
+        H3(f"{len(keywords)} Tracked Keywords", cls="font-semibold text-lg text-base-content/80"),
+        Select(
+            *[Option(label, value=val, selected=(sort == val)) for val, label in sort_options],
+            cls="select select-bordered select-sm w-48",
+            name="sort",
+            hx_get=serpwatcher_keywords_list.to(id=id, days=days, custom_start=custom_start, custom_end=custom_end),
+            hx_target="#serpwatcher-keywords",
+            hx_swap="innerHTML"
+        )
+    )
+
+    cards = []
+    for d in kw_data:
+        kw = d["kw"]
+        hist = d["hist"]
+        cur_pos = d["cur_pos"] if d["cur_pos"] != 999 else None
+        avg_pos = d["avg_pos"]
+        total_clicks = d["total_clicks"]
+        total_impressions = d["total_impressions"]
+        diff = d["diff"]
+        first = d["first"]
+
+        trend_icon = Span("—", cls="text-base-content/30 text-xs")
+        if cur_pos and first.get("avg_position") and cur_pos != first["avg_position"]:
+            cls_color = "text-success" if diff < 0 else "text-error"
             icon = "▲" if diff < 0 else "▼"
-            trend_icon = Span(f"{icon} {abs(diff):.1f}", cls=f"{cls} text-xs font-semibold")
-            trend_text = f"{'better' if diff < 0 else 'worse'}"
+            trend_icon = Span(f"{icon} {abs(diff):.1f}", cls=f"{cls_color} text-xs font-semibold")
 
         cards.append(Div(cls="card card-bordered bg-base-100 mb-3")(
             Div(cls="card-body p-4")(
@@ -2239,11 +2379,11 @@ def serpwatcher_keywords_list(id: int, days: int = 30, custom_start: str = "", c
                     Span(f"{days}d range"),
                 ),
                 Div(cls="mt-2"),
-                _render_position_history(hist),
+                _render_position_history(hist, start, end),
             ),
         ))
 
-    return Div(*cards)
+    return Div(header, Div(*cards))
 
 
 @rt
@@ -2252,8 +2392,8 @@ def serpwatcher(id: int, days: int = 30, custom_start: str = "", custom_end: str
         website = session.get(Website, id)
         if not website:
             return Titled("Website not found", P("Website not found"))
-        domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-        site_url = f"sc-domain:{domain}"
+        domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        site_url = get_site_url(website.url)
         keywords = get_tracked_keywords(session, id)
 
         all_data = []
@@ -2264,9 +2404,9 @@ def serpwatcher(id: int, days: int = 30, custom_start: str = "", custom_end: str
             query_positions = {}
             for r in trends:
                 if r["query"] and r["query"].lower() in kw_set and r["avg_position"]:
-                    if r["query"] not in query_positions:
-                        query_positions[r["query"]] = []
-                    query_positions[r["query"]].append(r["avg_position"])
+                    if r["query"].lower() not in query_positions:
+                        query_positions[r["query"].lower()] = []
+                    query_positions[r["query"].lower()].append(r["avg_position"])
             for q, positions in query_positions.items():
                 all_data.append({"query": q, "avg_position": round(sum(positions) / len(positions), 1)})
 
@@ -2277,7 +2417,8 @@ def serpwatcher(id: int, days: int = 30, custom_start: str = "", custom_end: str
     top10 = sum(1 for d in all_data if d["avg_position"] and d["avg_position"] <= 10)
     losing = sum(1 for d in all_data if d["avg_position"] and d["avg_position"] > 20)
 
-    movers = []
+    gainers = []
+    losers = []
     if keywords:
         start, end = resolve_dates(days, custom_start, custom_end)
         kw_set = {k.keyword.lower() for k in keywords}
@@ -2286,12 +2427,13 @@ def serpwatcher(id: int, days: int = 30, custom_start: str = "", custom_end: str
         for r in trends2:
             if r["query"] and r["query"].lower() in kw_set and r["avg_position"]:
                 kw_trend.setdefault(r["query"], []).append(r["avg_position"])
+        movers = []
         for q, pos_list in kw_trend.items():
-            pos_list.sort()
             if len(pos_list) >= 2:
                 movers.append({"query": q, "first": pos_list[0], "last": pos_list[-1],
                                "change": pos_list[-1] - pos_list[0]})
-        movers.sort(key=lambda x: abs(x["change"]), reverse=True)
+        gainers = sorted([m for m in movers if m["change"] < 0], key=lambda x: x["change"])
+        losers = sorted([m for m in movers if m["change"] > 0], key=lambda x: x["change"], reverse=True)
 
     return Title(f"SERPWatcher - {website.name}"), Main(cls="container")(
         A("← Back to Dashboard", href=site.to(id=id), cls="link link-primary mb-4"),
@@ -2317,15 +2459,20 @@ def serpwatcher(id: int, days: int = 30, custom_start: str = "", custom_end: str
             ),
             Div(cls="stat shadow rounded-lg p-4")(
                 Div("Period", cls="stat-title"),
-                Div(days_label, cls="stat-value text-lg"),
-                Div(cls="join mt-2")(
-                    *[A(dl, href=serpwatcher.to(id=id, days=d),
-                        cls="join-item btn btn-xs" + (" btn-primary" if d == days else ""))
-                      for d, dl in [(7, "7d"), (30, "30d"), (90, "90d")]]
+                Form(
+                    Input(type="hidden", name="id", value=str(id)),
+                    Select(
+                        *[Option(label, value=str(val), selected=(days == val)) for val, label in DAYS_OPTIONS],
+                        cls="select select-bordered select-sm w-full mt-2",
+                        name="days",
+                        onchange="this.form.submit()"
+                    ),
+                    render_custom_date_inputs(days, custom_start, custom_end),
+                    action="/serpwatcher", method="get", cls="flex flex-col gap-2 mt-2"
                 ),
             ),
         ),
-        Div(cls="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6")(
+        Div(cls="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6")(
             Div(cls="p-4 border border-base-300 rounded-lg")(
                 H2("Add Keyword", cls="text-lg font-semibold mb-1"),
                 P("Track any keyword to monitor its position trend in GSC.", cls="text-xs text-base-content/50 mb-2"),
@@ -2342,18 +2489,43 @@ def serpwatcher(id: int, days: int = 30, custom_start: str = "", custom_end: str
                 ),
                 Div(id="serpwatcher-add-result"),
             ),
-            Div(cls="p-4 border border-base-300 rounded-lg")(
+            Div(cls="p-4 border border-base-300 rounded-lg md:col-span-2")(
                 H2("Top Movers", cls="text-lg font-semibold mb-1"),
-                P("Biggest position changes in this period.", cls="text-xs text-base-content/50 mb-2"),
-                Div(cls="space-y-1 max-h-32 overflow-y-auto")(
-                    *[_render_mover_row(m) for m in movers[:8]] if movers else [P("Not enough data yet.", cls="text-xs text-base-content/40")],
-                ) if movers else P("Track keywords to see movers.", cls="text-xs text-base-content/40"),
+                P("Biggest position changes in this period.", cls="text-xs text-base-content/50 mb-4"),
+                Div(cls="grid grid-cols-1 sm:grid-cols-2 gap-4")(
+                    Div(
+                        H3("Gainers", cls="text-sm font-medium text-success mb-2"),
+                        Div(cls="space-y-1 max-h-64 overflow-y-auto")(
+                            *[_render_mover_row(m) for m in gainers[:5]] if gainers else [P("No gainers yet.", cls="text-xs text-base-content/40")],
+                            Div(cls="space-y-1 mt-1")(
+                                *[Div(cls="hidden")(_render_mover_row(m)) for m in gainers[5:]]
+                            ) if len(gainers) > 5 else "",
+                            Div(cls="text-xs text-primary cursor-pointer mt-2 hover:underline",
+                                onclick="let h=this.previousElementSibling.querySelectorAll('.hidden'); if(this.innerText.includes('more')){ for(let i=0;i<50&&i<h.length;i++) h[i].classList.remove('hidden'); if(h.length<=50) this.innerText='▲ See less'; } else { let all=this.previousElementSibling.children; for(let i=0;i<all.length;i++) all[i].classList.add('hidden'); this.innerText='▼ See more'; }")(
+                                "▼ See more"
+                            ) if len(gainers) > 5 else ""
+                        )
+                    ),
+                    Div(
+                        H3("Losers", cls="text-sm font-medium text-error mb-2"),
+                        Div(cls="space-y-1 max-h-64 overflow-y-auto")(
+                            *[_render_mover_row(m) for m in losers[:5]] if losers else [P("No losers yet.", cls="text-xs text-base-content/40")],
+                            Div(cls="space-y-1 mt-1")(
+                                *[Div(cls="hidden")(_render_mover_row(m)) for m in losers[5:]]
+                            ) if len(losers) > 5 else "",
+                            Div(cls="text-xs text-primary cursor-pointer mt-2 hover:underline",
+                                onclick="let h=this.previousElementSibling.querySelectorAll('.hidden'); if(this.innerText.includes('more')){ for(let i=0;i<50&&i<h.length;i++) h[i].classList.remove('hidden'); if(h.length<=50) this.innerText='▲ See less'; } else { let all=this.previousElementSibling.children; for(let i=0;i<all.length;i++) all[i].classList.add('hidden'); this.innerText='▼ See more'; }")(
+                                "▼ See more"
+                            ) if len(losers) > 5 else ""
+                        )
+                    )
+                ) if (gainers or losers) else P("Track keywords to see movers.", cls="text-xs text-base-content/40")
             ),
         ),
         Div(id="serpwatcher-keywords")(
             Div(
                 Span("Loading...", cls="text-sm text-base-content/60"),
-                hx_get=serpwatcher_keywords_list.to(id=id, days=days),
+                hx_get=serpwatcher_keywords_list.to(id=id, days=days, custom_start=custom_start, custom_end=custom_end),
                 hx_trigger="load",
                 hx_swap="innerHTML",
             ),
@@ -2683,7 +2855,7 @@ def _render_schema_block(s: dict):
 
 def load_or_setup_mapper(session, website):
     "Try to load mapper, return ('ok', mapping) or ('missing', None) or ('error', domain, message)."
-    domain = website.url.removeprefix("https://").removeprefix("http://").rstrip("/")
+    domain = website.url.removeprefix("https://").removeprefix("http://").strip().rstrip("/")
     mapper_path = Path.home() / ".config" / "seootter" / "mappers" / domain / "mapper.py"
     if not mapper_path.exists():
         return ("missing", domain, mapper_path)
@@ -2710,7 +2882,7 @@ def report(id: int, refresh: bool = False, export: str = ""):
         website = session.get(Website, id)
         if not website:
             return Titled("Not found", P("Website not found"))
-        domain = website.url.removeprefix("https://").removeprefix("http://").rstrip("/")
+        domain = website.url.removeprefix("https://").removeprefix("http://").strip().rstrip("/")
         if refresh:
             from seootter.models import URLMapping
             for m in session.exec(select(URLMapping).where(URLMapping.website_id == id)):
@@ -2793,7 +2965,7 @@ def report_content(id: int, refresh: bool = False, export: str = ""):
         if not website:
             return P("Website not found")
         is_quarto = website.site_type == "quarto"
-        domain = website.url.removeprefix("https://").removeprefix("http://").rstrip("/")
+        domain = website.url.removeprefix("https://").removeprefix("http://").strip().rstrip("/")
         status, domain_or_result, result = load_or_setup_mapper(session, website)
         if status != "ok":
             return Div(
@@ -2821,7 +2993,7 @@ def _run_report(id: int, is_quarto: bool):
         if not website:
             _report_progress[id] = {"status": "error", "pct": 0, "msg": "Website not found"}
             return
-        domain = website.url.removeprefix("https://").removeprefix("http://").rstrip("/")
+        domain = website.url.removeprefix("https://").removeprefix("http://").strip().rstrip("/")
         report_data = generate_seo_report(
             session=session,
             website_id=id,
@@ -2983,7 +3155,7 @@ def edit_mapper(id: int):
         website = session.get(Website, id)
         if not website:
             return Titled("Not found", P("Website not found"))
-        domain = website.url.removeprefix("https://").removeprefix("http://").rstrip("/")
+        domain = website.url.removeprefix("https://").removeprefix("http://").strip().rstrip("/")
         local_mode = "direct" if website.site_type in ("quarto", "nbdev") else "slug"
         name = website.name
         url = website.url
@@ -3011,6 +3183,7 @@ def edit_mapper(id: int):
 
 @rt
 def save_mapper(id: int, domain: str, code: str, mode: str = "local"):
+    domain = domain.strip().rstrip("/")
     mapper_dir = Path.home() / ".config" / "seootter" / "mappers" / domain
     mapper_dir.mkdir(parents=True, exist_ok=True)
     mapper_path = mapper_dir / "mapper.py"
@@ -3030,7 +3203,7 @@ def delete_mapper(id: int):
     with get_session() as session:
         website = session.get(Website, id)
         if website:
-            domain = website.url.removeprefix("https://").removeprefix("http://").rstrip("/")
+            domain = website.url.removeprefix("https://").removeprefix("http://").strip().rstrip("/")
             mapper_path = Path.home() / ".config" / "seootter" / "mappers" / domain / "mapper.py"
             if mapper_path.exists():
                 mapper_path.unlink()
@@ -3708,7 +3881,7 @@ def wuilt_store(store_pk: int):
 def _store_base_url(store) -> str:
     """Build clean base URL from store_domain, stripping any locale path to avoid duplication."""
     raw = store.store_domain or ""
-    raw = raw.replace("https://", "").replace("http://", "").rstrip("/")
+    raw = raw.replace("https://", "").replace("http://", "").strip().rstrip("/")
     for loc in ("/ar", "/en"):
         if raw.endswith(loc):
             raw = raw[: -len(loc)]
@@ -3724,16 +3897,16 @@ def _resolve_store_site(store, session):
     if store.website_id:
         website = session.get(Website, store.website_id)
     if not website and store.store_domain:
-        raw = store.store_domain.replace("https://", "").replace("http://", "").rstrip("/")
+        raw = store.store_domain.replace("https://", "").replace("http://", "").strip().rstrip("/")
         for loc in ("/ar", "/en"):
             if raw.endswith(loc):
                 raw = raw[: -len(loc)]
                 break
         website = session.exec(select(Website).where(Website.url.contains(raw))).first()
     if website:
-        domain = website.url.replace("https://", "").replace("http://", "").rstrip("/")
-        site_url = f"sc-domain:{domain}"
-        base_url = website.url.rstrip("/")
+        domain = website.url.replace("https://", "").replace("http://", "").strip().rstrip("/")
+        site_url = get_site_url(website.url)
+        base_url = website.url.strip().rstrip("/")
     elif store.store_domain:
         base_url = _store_base_url(store)
         raw_domain = base_url.replace("https://", "")
@@ -3971,7 +4144,7 @@ def wuilt_product_schema(store_pk: int, pid: int):
                 return Div(cls="alert alert-error")(Span("Product not found"))
             website = session.get(Website, store.website_id) if store.website_id else None
             if not website and store.store_domain:
-                raw = store.store_domain.replace("https://", "").replace("http://", "").rstrip("/")
+                raw = store.store_domain.replace("https://", "").replace("http://", "").strip().rstrip("/")
                 for loc in ("/ar", "/en"):
                     if raw.endswith(loc):
                         raw = raw[: -len(loc)]

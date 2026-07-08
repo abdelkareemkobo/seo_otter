@@ -119,7 +119,7 @@ def generate_seo_report(
                     if fetch_base_url
                     else article.url
                 )
-                html = httpx.get(fetch_url, timeout=15).text
+                html = httpx.get(fetch_url, timeout=15, verify=False, headers={"User-Agent": "Mozilla/5.0"}).text
                 metadata = extract_html_metadata(html)
                 content = fetch_url_as_markdown(fetch_url)
                 headers = extract_headers(content)
