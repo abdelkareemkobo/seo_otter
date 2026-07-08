@@ -308,14 +308,30 @@ def map_files_to_slugs(directory: str  # Directory containing Arabic markdown fi
 
 
 # %% ../nbs/02_content_parser.ipynb #347659b7ad901618
+def _http_get(url, **kwargs):
+    import os, warnings, ssl, httpx
+    kwargs.setdefault("timeout", 15)
+    kwargs.setdefault("headers", {"User-Agent": "Mozilla/5.0"})
+    if os.getenv("SEEOOTTER_VERIFY_SSL", "1") == "0":
+        kwargs["verify"] = False
+        return httpx.get(url, **kwargs)
+    try:
+        return httpx.get(url, **kwargs)
+    except (ssl.SSLError, httpx.ConnectError) as e:
+        if "UNEXPECTED_EOF" in str(e):
+            warnings.warn(f"SSL EOF for {url}, retrying without verification")
+            kwargs.pop("verify", None)
+            return httpx.get(url, verify=False, **kwargs)
+        raise
+
 def fetch_url_as_markdown(url: str,  # Live URL to fetch
                           extractor: str = "trafilatura"  # 'trafilatura' or 'html2text'
                           ) -> str:
     "Fetch a live URL and return its main content as markdown."
-    import httpx, lxml.html
+    import lxml.html
     from lxml.html.clean import Cleaner
 
-    body = lxml.html.fromstring(httpx.get(url, verify=False, headers={"User-Agent": "Mozilla/5.0"}).text).xpath('//body')[0]
+    body = lxml.html.fromstring(_http_get(url).text).xpath('//body')[0]
     body = Cleaner(javascript=True, style=True).clean_html(body)
     cts = ''.join(lxml.html.tostring(c, encoding='unicode') for c in body)
 

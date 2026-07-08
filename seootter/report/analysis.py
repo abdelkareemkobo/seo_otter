@@ -65,13 +65,15 @@ def analyze_article(article: Article,
             content = p["content"]
             headers = p["headers"]
         else:
+            from ..parser.utils import _http_get
             try:
                 fetch_url = article.url.replace(f"https://{domain}", fetch_base_url) if fetch_base_url else article.url
-                html = httpx.get(fetch_url, timeout=15, verify=False, headers={"User-Agent": "Mozilla/5.0"}).text
+                html = _http_get(fetch_url).text
                 metadata = extract_html_metadata(html)
                 content = fetch_url_as_markdown(fetch_url)
                 headers = extract_headers(content)
-            except Exception:
+            except Exception as ex:
+                import logging; logging.getLogger(__name__).warning(f"Fetch failed for {article.url}: {ex}")
                 return {"file_path": article.file_path, "error": "fetch_failed"}
     elif article.file_path.endswith(".ipynb"):
         try:

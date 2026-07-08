@@ -112,6 +112,8 @@ def generate_seo_report(
     prefetched: dict[str, dict] = {}
     if fetch_articles:
 
+        from ..parser.utils import _http_get
+
         def _fetch_one(article: Article) -> tuple[str, dict | None]:
             try:
                 fetch_url = (
@@ -119,7 +121,7 @@ def generate_seo_report(
                     if fetch_base_url
                     else article.url
                 )
-                html = httpx.get(fetch_url, timeout=15, verify=False, headers={"User-Agent": "Mozilla/5.0"}).text
+                html = _http_get(fetch_url).text
                 metadata = extract_html_metadata(html)
                 content = fetch_url_as_markdown(fetch_url)
                 headers = extract_headers(content)

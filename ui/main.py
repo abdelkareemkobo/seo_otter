@@ -903,17 +903,24 @@ def sync_widget(id: int, days: int = 90, custom_start: str = "", custom_end: str
 
 
 
+_latest_db_date_engine = None
+
 def _latest_db_date() -> str:
+    global _latest_db_date_engine
     try:
-        from sqlmodel import Session, create_engine
-        from sqlalchemy import text
+        from sqlmodel import Session, text
         import os
         db_url = os.getenv("SEEOOTTER_DB_URL", "")
         if not db_url:
             return ""
-        with Session(create_engine(db_url)) as session:
+        if _latest_db_date_engine is None:
+            from sqlmodel import create_engine
+            _latest_db_date_engine = create_engine(db_url)
+        with Session(_latest_db_date_engine) as session:
             return session.exec(text("SELECT MAX(date) FROM gscanalytics")).scalar()
-    except Exception:
+    except Exception as ex:
+        import logging
+        logging.getLogger(__name__).warning(f"_latest_db_date failed: {ex}")
         return ""
 
 def resolve_dates(days: int, custom_start: str, custom_end: str) -> tuple[str, str]:
@@ -2182,7 +2189,7 @@ def _render_position_history(history, start_date=None, end_date=None, max_bars=4
         
     recent = []
     for i, bucket in enumerate(buckets):
-        valid_pos = [h["avg_position"] for h in bucket if h.get("avg_position")]
+        valid_pos = [h["avg_position"] for h in bucket if h.get("avg_position") is not None]
         avg_pos = sum(valid_pos) / len(valid_pos) if valid_pos else None
         bucket_days = total_days / num_bars
         mid_days = (i + 0.5) * bucket_days
