@@ -139,26 +139,16 @@ class WuiltClient:
         seo_description: str | None = None,
         description_html: str | None = None,
         short_description: str | None = None,
-        title: str | None = None,
-        handle: str | None = None,
     ) -> dict:
         "Update a product's SEO fields. Only non-None fields are sent."
         mutation = """
         mutation UpdateProduct($input: ProductInput!, $locale: String!) {
             updateProduct(input: $input, locale: $locale) {
-                product { id }
+                product { id title seo { title description } }
             }
         }
         """
         inp = {"id": product_id, "storeId": self.store_id}
-        if title is not None:
-            inp["title"] = title
-        if handle is not None:
-            inp["handle"] = handle
-        inp["type"] = "SIMPLE"
-        inp["status"] = "ACTIVE"
-        inp["options"] = []
-        inp["variants"] = []
         seo = {}
         if seo_title is not None:
             seo["title"] = seo_title
@@ -170,8 +160,8 @@ class WuiltClient:
             inp["descriptionHtml"] = description_html
         if short_description is not None:
             inp["shortDescription"] = short_description
-        self._request(mutation, {"input": inp, "locale": self.locale})
-        return {"id": product_id, "updated": True}
+        result = self._request(mutation, {"input": inp, "locale": self.locale})
+        return result["updateProduct"]["product"]
 
     def get_collections(self) -> list[dict]:
         "Fetch all collections with SEO fields."

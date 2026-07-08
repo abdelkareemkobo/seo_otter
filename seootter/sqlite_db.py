@@ -19,17 +19,25 @@ load_dotenv()
 from contextlib import contextmanager
 
 
+_engines = {}
+
+
 @contextmanager
 def get_session(db_url: str | None = None  # Full SQLite URL, or uses `SEEOOTTER_DB_URL` env var
                 ) -> Session:
     "Create a SQLite session."
     if db_url is None: db_url = os.getenv("SEEOOTTER_DB_URL")
-    engine = create_engine(db_url)
-    SQLModel.metadata.create_all(engine)
+    if db_url not in _engines:
+        engine = create_engine(db_url, connect_args={"timeout": 30.0})
+        with engine.connect() as conn:
+            conn.exec_driver_sql("PRAGMA journal_mode=WAL;")
+        SQLModel.metadata.create_all(engine)
+        _engines[db_url] = engine
+    else:
+        engine = _engines[db_url]
     session = Session(engine)
     try:
         yield session
     finally:
         session.close()
-
 

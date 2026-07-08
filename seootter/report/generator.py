@@ -119,7 +119,7 @@ def generate_seo_report(
                     if fetch_base_url
                     else article.url
                 )
-                html = httpx.get(fetch_url, timeout=15).text
+                html = httpx.get(fetch_url, timeout=15, verify=False, headers={"User-Agent": "Mozilla/5.0"}).text
                 metadata = extract_html_metadata(html)
                 content = fetch_url_as_markdown(fetch_url)
                 headers = extract_headers(content)
@@ -142,7 +142,11 @@ def generate_seo_report(
 
         with ThreadPoolExecutor(max_workers=10) as pool:
             futures = {pool.submit(_fetch_one, a): a for a in fetch_articles}
+            fetched_count = 0
             for future in as_completed(futures):
+                fetched_count += 1
+                if progress_callback:
+                    progress_callback(0, total, f"Prefetching {fetched_count}/{len(fetch_articles)}...")
                 url, result = future.result()
                 if result:
                     prefetched[url] = result

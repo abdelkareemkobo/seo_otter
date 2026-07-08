@@ -36,7 +36,6 @@ dependencies = [
     "fhdaisy>=0.0.1",
     "pycountry>=26.2.16",
     "dspy>=2.6.0",
-    "llama-cpp-python>=0.3.23",
     "ipywidgets>=8.1.8",
     "botocore>=1.43.17",
 ]

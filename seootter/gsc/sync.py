@@ -11,7 +11,7 @@ __all__ = ['store_single_date', 'store_date_range', 'iter_dates', 'get_missing_d
 from sqlmodel import Session, select
 from ..models import GSCAnalytics
 from datetime import datetime, timedelta
-from .filters import store_gsc_data
+from .filters import store_gsc_data, store_gsc_property_totals, store_gsc_page_totals
 from ..gsc_client import GSCAuth, fetch_gsc_data, get_date_range
 import time
 
@@ -21,10 +21,21 @@ def store_single_date(session: Session,  # Active database session
                       site_url: str,  # GSC property URL
                       date: str  # Date to fetch and store (YYYY-MM-DD)
                       ) -> int:
-    "Fetch and store GSC data for a single date. Returns number of records stored."
+    "Fetch and store GSC data for a single date. Returns number of detailed records stored."
+    # Fetch exact property totals (without query dimension to avoid anonymization filtering)
+    totals = fetch_gsc_data(auth, site_url, date, date, dimensions=["date"])
+    store_gsc_property_totals(session, site_url, date, totals)
+
+    # Fetch exact page totals (without query dimension)
+    page_rows = fetch_gsc_data(auth, site_url, date, date, dimensions=['page'])
+    store_gsc_page_totals(session, site_url, date, page_rows)
+    
+    # Fetch detailed query data
     rows = fetch_gsc_data(auth, site_url, date, date)
     store_gsc_data(session, site_url, date, rows)
+    
     return len(rows)
+
 
 # %% ../../nbs/05c_gsc_sync.ipynb #sync_dates
 def _sync_dates(session: Session,  # Active database session
@@ -71,7 +82,7 @@ def get_missing_dates(session: Session,  # Active database session
     stored = set(session.exec(
         select(GSCAnalytics.date).where(GSCAnalytics.site_url == site_url).distinct()
     ).all())
-    return sorted(set(iter_dates(start_date, end_date)) - stored)
+    return sorted(set(iter_dates(start_date, end_date)) - stored, reverse=True)
 
 # %% ../../nbs/05c_gsc_sync.ipynb #sync_missing_dates
 def sync_missing_dates(session: Session, auth: GSCAuth, site_url: str, start_date: str, end_date: str) -> dict:

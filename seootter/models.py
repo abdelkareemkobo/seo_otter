@@ -6,9 +6,10 @@ Docs: https://abdelkareemkobo.github.io/seoottermodels.html.md"""
 
 # %% auto #0
 __all__ = ['get_all_websites', 'delete_website', 'get_tracked_keywords', 'add_tracked_keyword', 'delete_tracked_keyword',
-           'get_url_mapping', 'sync_url_mapping', 'add_or_update_website', 'print_websites', 'get_all_wuilt_stores',
-           'add_or_update_wuilt_store', 'delete_wuilt_store', 'get_wuilt_products', 'upsert_wuilt_product', 'WuiltPage',
-           'print_wuilt_stores', 'print_wuilt_products', 'get_wuilt_pages', 'upsert_wuilt_page', 'print_wuilt_pages']
+           'get_url_mapping', 'sync_url_mapping', 'add_or_update_website', 'print_websites', 'GSCPropertyTotals',
+           'GSCPageTotals', 'get_all_wuilt_stores', 'add_or_update_wuilt_store', 'delete_wuilt_store',
+           'get_wuilt_products', 'upsert_wuilt_product', 'WuiltPage', 'print_wuilt_stores', 'print_wuilt_products',
+           'get_wuilt_pages', 'upsert_wuilt_page', 'print_wuilt_pages']
 
 # %% ../nbs/01_models.ipynb #8af54b8e
 from sqlmodel import Field, SQLModel, UniqueConstraint, Session, select, Column
@@ -220,6 +221,39 @@ class GSCAnalytics(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.now)
 
 
+
+# %% ../nbs/01_models.ipynb #d7944ca2
+class GSCPropertyTotals(SQLModel, table=True):
+    "Google Search Console property-level analytics totals."
+    __table_args__ = (
+        UniqueConstraint("site_url", "date"),
+        {"extend_existing": True},
+    )
+    id: int | None = Field(default=None, primary_key=True)
+    site_url: str
+    date: str
+    clicks: int = 0
+    impressions: int = 0
+    ctr: float = 0.0
+    position: float = 0.0
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class GSCPageTotals(SQLModel, table=True):
+    """Google Search Console exact page-level analytics totals."""
+    __table_args__ = (
+        UniqueConstraint("site_url", "date", "page"),
+        {"extend_existing": True},
+    )
+    id: int | None = Field(default=None, primary_key=True)
+    site_url: str
+    date: str
+    page: str
+    clicks: int = 0
+    impressions: int = 0
+    ctr: float = 0.0
+    position: float = 0.0
+    created_at: datetime = Field(default_factory=datetime.now)
 
 # %% ../nbs/01_models.ipynb #1fd437e0
 class IndexStatus(SQLModel, table=True):

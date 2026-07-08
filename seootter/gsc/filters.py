@@ -6,7 +6,7 @@ Docs: https://abdelkareemkobo.github.io/seoottergsc_filters.html.md"""
 
 # %% auto #0
 __all__ = ['filter_site', 'filter_dates', 'filter_dimension', 'filter_exclude_pages', 'AnalyticsSummary', 'normalize_url',
-           'parse_gsc_row', 'store_gsc_data']
+           'parse_gsc_row', 'store_gsc_data', 'store_gsc_property_totals', 'store_gsc_page_totals']
 
 # %% ../../nbs/05a_gsc_filters.ipynb #4ca0888982397e06
 from ..models import GSCAnalytics
@@ -92,6 +92,54 @@ def store_gsc_data(session: Session,  # Active database session
             index_elements=["site_url", "date", "query", "page", "country", "device"],
             set_={"clicks": record.clicks, "impressions": record.impressions,
                   "ctr": record.ctr, "position": record.position}
+        )
+        session.exec(stmt)
+    session.commit()
+
+
+# %% ../../nbs/05a_gsc_filters.ipynb #557652f2
+from ..models import GSCPropertyTotals
+
+def store_gsc_property_totals(session: Session,
+                              site_url: str,
+                              date: str,
+                              rows: list[dict]
+                              ) -> None:
+    """Store site-level GSC totals with upsert."""
+    if not rows:
+        return
+    row = rows[0]  # There should only be one row since we only group by date
+    stmt = insert(GSCPropertyTotals).values(
+        site_url=site_url, date=date,
+        clicks=row["clicks"], impressions=row["impressions"],
+        ctr=row["ctr"], position=row["position"]
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["site_url", "date"],
+        set_={'clicks': row['clicks'], 'impressions': row['impressions'], 'ctr': row['ctr'], 'position': row['position']}
+    )
+    session.exec(stmt)
+    session.commit()
+
+from ..models import GSCPageTotals
+
+def store_gsc_page_totals(session: Session,
+                          site_url: str,
+                          date: str,
+                          rows: list[dict]
+                          ) -> None:
+    """Store page-level GSC totals with upsert."""
+    if not rows:
+        return
+    for row in rows:
+        stmt = insert(GSCPageTotals).values(
+            site_url=site_url, date=date, page=row["keys"][0],
+            clicks=row["clicks"], impressions=row["impressions"],
+            ctr=row["ctr"], position=row["position"]
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["site_url", "date", "page"],
+            set_={'clicks': row['clicks'], 'impressions': row['impressions'], 'ctr': row['ctr'], 'position': row['position']}
         )
         session.exec(stmt)
     session.commit()
