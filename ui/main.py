@@ -4483,6 +4483,6 @@ def wuilt_delete_store(store_pk: int):
     return RedirectResponse("/wuILT", status_code=303)
 
 
-serve(port=5003)
+import os; serve(port=5003, reload=os.getenv("FASTHTML_RELOAD", "").lower() in ("1", "true", "yes"))
 
 # Trigger reload

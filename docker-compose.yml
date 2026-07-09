@@ -1,0 +1,13 @@
+services:
+  seootter:
+    build: .
+    ports:
+      - "5003:5003"
+    volumes:
+      - ./nbs/data:/app/nbs/data
+      - ./token.pickle:/app/token.pickle
+      - ./client_secrets.json:/app/client_secrets.json
+      - ~/.config/seootter:/root/.config/seootter
+    environment:
+      - SEEOOTTER_DB_URL=sqlite:///nbs/data/seo.db
+    restart: unless-stopped

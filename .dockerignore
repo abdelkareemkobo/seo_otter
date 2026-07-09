@@ -1,0 +1,11 @@
+.venv
+.git
+.gitignore
+__pycache__
+*.pyc
+nbs
+_docs
+.planning
+.env
+token.pickle
+client_secrets.json
